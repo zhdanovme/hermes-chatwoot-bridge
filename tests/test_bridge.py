@@ -161,8 +161,10 @@ async def test_same_conversation_messages_are_serialized():
 
 @pytest.mark.anyio
 async def test_demo_page_bootstraps_chatwoot_web_widget():
-    app = create_app(
-        BridgeSettings(chatwoot_public_url="http://localhost:3000", chatwoot_website_token="demo-token"),
+    from tests.demo import create_demo_app
+
+    app = create_demo_app(
+        public_url="http://localhost:3000", website_token="demo-token",
         hermes_client=FakeHermes(),
         chatwoot_client=FakeChatwoot(),
     )
@@ -174,6 +176,14 @@ async def test_demo_page_bootstraps_chatwoot_web_widget():
     assert response.headers["content-type"].startswith("text/html")
     assert "demo-token" in response.text
     assert "http://localhost:3000/packs/js/sdk.js" in response.text
+
+
+@pytest.mark.anyio
+async def test_bridge_does_not_expose_test_demo():
+    app = create_app(BridgeSettings(), hermes_client=FakeHermes(), chatwoot_client=FakeChatwoot())
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/demo")
+    assert response.status_code == 404
 
 
 @pytest.mark.anyio
@@ -266,7 +276,7 @@ async def test_hermes_client_uses_named_conversation():
 
 
 def test_hermes_api_platform_has_no_builtin_toolsets():
-    config = yaml.safe_load((Path(__file__).parents[1] / "config" / "hermes.yaml").read_text())
+    config = yaml.safe_load((Path(__file__).parents[1] / "tests" / "config" / "hermes.yaml").read_text())
 
     assert config["platform_toolsets"]["api_server"] == []
 

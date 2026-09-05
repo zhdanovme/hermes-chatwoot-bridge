@@ -1,98 +1,91 @@
-# Hermes ↔ Chatwoot bridge
+# Hermes Chatwoot Bridge
 
-Локальный bridge превращает Hermes Agent в Chatwoot AgentBot: входящее сообщение
-из Chatwoot уходит в Hermes, а ответ Hermes создаётся в той же conversation.
-Контекст хранится на стороне Hermes в именованной `conversation`, поэтому разные
-диалоги изолированы друг от друга.
+Connect an existing Chatwoot inbox to Hermes Agent. The bridge receives an AgentBot
+webhook, requests a reply from Hermes, and posts it to the same conversation.
 
-## Запуск
+`Chatwoot → bridge → Hermes → bridge → Chatwoot`
 
-```bash
-cp .env.example .env
-docker compose up -d
-docker compose logs -f bridge hermes
-```
+The root Compose file starts only the bridge. The complete local sandbox and web
+widget demo are in [tests/](tests/README.md).
 
-Открыть Chatwoot: http://localhost:3000.
+## Run the bridge
 
-Compose автоматически копирует `config/hermes.yaml` в volume Hermes через
-одноразовый сервис `hermes-config`. Его состояние `Exited (0)` после запуска —
-нормальное: основной сервис `hermes` стартует только после успешной инициализации.
+Prerequisites: a running Chatwoot instance, a Hermes server exposing
+`/v1/responses`, and API credentials for both.
 
-Перед первым диалогом нужно один раз:
+1. Copy `.env.example` to `.env` and set the service URLs and credentials.
+   URLs must be reachable from the bridge container; `localhost` means the
+   container itself.
+2. Edit [config/employee.md](config/employee.md) with your employee instructions.
+3. Disable built-in tools in your Hermes server configuration:
 
-1. Создать локального администратора Chatwoot.
-2. Создать Website inbox в Chatwoot (Settings → Inboxes → Add inbox → Website) и
-   скопировать его `Website token` в `CHATWOOT_WEBSITE_TOKEN`.
-3. В Chatwoot создать Agent Bot с `outgoing_url`:
-   `http://bridge:8080/webhooks/chatwoot` и типом `Webhook`.
-4. Привязать Agent Bot к нужному inbox.
-5. Добавить нужных операторов в этот inbox, иначе они не увидят его conversations
-   в интерфейсе Chatwoot.
-6. Создать API access token пользователя Chatwoot и записать его в `CHATWOOT_API_TOKEN`.
-7. Если у Agent Bot задан secret, записать его в `CHATWOOT_WEBHOOK_SECRET`.
-8. Настроить провайдера Hermes: передать `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` в `.env`
-   или выполнить `docker compose exec hermes hermes setup --portal`.
+   ```yaml
+   platform_toolsets:
+     api_server: []
+   ```
 
-После изменения `.env`:
+4. Start the bridge:
 
-```bash
-docker compose up -d --build
-curl http://localhost:8080/healthz
-```
+   ```bash
+   docker compose up -d --build
+   curl http://localhost:8080/healthz
+   ```
 
-Ожидаемый health-ответ:
+The health endpoint reports `configured: true` when both API credentials are
+present; it does not test downstream connectivity.
 
-```json
-{"status":"ok","configured":true}
-```
+Port 8080 binds to loopback by default. Use your reverse proxy or a shared Docker
+network to make the webhook reachable from Chatwoot.
 
-Для теста через встроенный веб-чат откройте http://localhost:8080/demo. Страница
-подгрузит Chatwoot Web Widget, а сообщения попадут в тот же inbox и пройдут через
-Agent Bot → Hermes → ответ в conversation.
+## Connect an inbox
 
-> `SAFE_FETCH_ALLOW_PRIVATE_NETWORK=true` включён в Chatwoot только для этой
-> локальной Compose-сборки, чтобы AgentBot мог вызвать `http://bridge:8080` во
-> внутренней Docker-сети. Не переносите эту настройку в публичный production без
-> отдельной оценки SSRF-риска и сетевых ограничений.
+1. Create a webhook Agent Bot in Chatwoot with outgoing URL
+   `<bridge-url>/webhooks/chatwoot`.
+2. Assign the bot to your inbox and add the operators who should see its conversations.
+3. Set `CHATWOOT_API_TOKEN` to a user token with access to the inbox.
+4. If the bot has a webhook secret, put the same value in
+   `CHATWOOT_WEBHOOK_SECRET`. Recreate the bridge after environment changes.
 
-## Контракт bridge
+Send a message through the inbox and check that its reply appears in the same
+conversation. Inspect delivery errors with `docker compose logs -f bridge`.
 
-Bridge принимает Chatwoot AgentBot webhook `message_created`. Обрабатываются только
-публичные входящие сообщения (`message_type=incoming`, `private=false`). Исходящие
-сообщения Hermes и private notes игнорируются, чтобы не создавать цикл.
+## Configuration
 
-Для каждой Chatwoot conversation используется отдельная Hermes conversation:
+| Variable | Purpose |
+| --- | --- |
+| `CHATWOOT_URL`, `CHATWOOT_API_TOKEN` | Chatwoot endpoint and user credential |
+| `HERMES_API_URL`, `HERMES_API_KEY` | Hermes endpoint and credential |
+| `CHATWOOT_WEBHOOK_SECRET` | Timestamped HMAC validation; empty disables it |
+| `HERMES_MODEL` | Hermes model selector; default: `hermes-agent` |
+| `WEBHOOK_TOLERANCE_SECONDS` | Maximum signed webhook age; default: 300 |
 
-```text
-hermes:{chatwoot_account_id}:{chatwoot_conversation_id}
-```
+Compose mounts the employee prompt read-only and persists the delivery ledger in
+`bridge_data`. Restart the bridge after editing the prompt. Model provider
+credentials belong on the Hermes server.
 
-Доставка идемпотентна по Chatwoot message id. Hermes ошибки возвращаются как `500`,
-чтобы Chatwoot мог повторить webhook; bridge не отправляет выдуманный fallback-ответ.
+## Behavior and limits
 
-API-сессии Hermes работают без инструментов. Bridge явно отправляет `tools: []`, а
-`config/hermes.yaml` задаёт `platform_toolsets.api_server: []`, поэтому ответы могут
-опираться только на `config/employee.md`, метаданные контакта и историю текущей
-conversation. Файлы, terminal, web, skills, memory и другие встроенные инструменты
-на API-поверхности недоступны. Эта настройка не отключает инструменты в прямом CLI
-Hermes.
+- Only public incoming `message_created` events containing text trigger replies.
+  Outgoing messages and private notes are ignored.
+- Each conversation maps to `hermes:{account_id}:{conversation_id}`. Hermes
+  persists its history. Messages are serialized per conversation within one bridge process.
+- The bridge sends `tools: []`; the Hermes configuration above is also required
+  to disable built-in tools. Separate histories alone are not a security boundary.
+- The prompt directs replies to use its instructions, contact metadata, and the
+  current history. This does not erase the model's pretrained knowledge.
+- The SQLite ledger suppresses duplicate message IDs. Downstream HTTP/runtime
+  failures return `500` for Chatwoot retries. Delivery is not guaranteed exactly
+  once across crashes or ambiguous network failures.
+- Human handoff is not automated: mentioning a colleague does not assign an operator.
 
-## Проверка без внешнего канала
-
-После создания inbox и Agent Bot можно отправить тестовый webhook напрямую:
+## Development
 
 ```bash
-curl -X POST http://localhost:8080/webhooks/chatwoot \
-  -H 'Content-Type: application/json' \
-  -d '{"event":"message_created","id":1,"message_type":"incoming","private":false,"content":"Привет","account":{"id":1},"conversation":{"id":1},"sender":{"id":1,"name":"Тест"},"inbox":{"id":1,"name":"Local"}}'
+uv sync --extra dev
+uv run pytest -q
+uv run ruff check .
 ```
 
-Для этого smoke-теста подпись отключена только если `CHATWOOT_WEBHOOK_SECRET` пуст.
-
-## Что сознательно не входит сейчас
-
-Telegram user-account/MTProto и Wazzup оставлены на следующий этап. Их следует
-подключать отдельными transport-адаптерами, не смешивая их с текущей Chatwoot ↔ Hermes
-сессией и не подключая один почтовый ящик одновременно к Chatwoot и Hermes IMAP.
-# hermes-chatwoot-bridge
+All tests, demo code, and full-stack fixtures are in [tests/](tests/README.md).
+Telegram account/MTProto, Wazzup, and email transport adapters are outside the
+current scope.
