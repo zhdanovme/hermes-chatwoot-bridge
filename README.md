@@ -63,6 +63,12 @@ Compose mounts the employee prompt read-only and persists the delivery ledger in
 `bridge_data`. Restart the bridge after editing the prompt. Model provider
 credentials belong on the Hermes server.
 
+Instructions are loaded only from a UTF-8 file at startup. Outside Compose,
+`HERMES_INSTRUCTIONS_FILE` selects the path (default: `config/employee.md`, relative
+to the working directory). A missing, unreadable, or empty file prevents startup.
+There is no built-in prompt or inline environment override; the old
+`HERMES_INSTRUCTIONS` variable is ignored.
+
 ## Behavior and limits
 
 - Only public incoming `message_created` events containing text trigger replies.
