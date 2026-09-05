@@ -1,0 +1,10 @@
+_config_version: 12
+
+model:
+  default: "gpt-5.6-terra"
+  provider: "custom"
+  api_key: "${OPENAI_API_KEY}"
+  base_url: "https://ai-gateway.void0.org/v1"
+
+platform_toolsets:
+  api_server: []

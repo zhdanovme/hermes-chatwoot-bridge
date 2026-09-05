@@ -1,0 +1,154 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: chatwoot_production
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d chatwoot_production"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  chatwoot:
+    image: chatwoot/chatwoot:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      RAILS_ENV: production
+      NODE_ENV: production
+      INSTALLATION_ENV: docker
+      SECRET_KEY_BASE: ${CHATWOOT_SECRET_KEY_BASE:-local-only-change-me}
+      FRONTEND_URL: http://localhost:3000
+      ENABLE_ACCOUNT_SIGNUP: "true"
+      POSTGRES_HOST: postgres
+      POSTGRES_USERNAME: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DATABASE: chatwoot_production
+      REDIS_URL: redis://redis:6379
+      RAILS_LOG_TO_STDOUT: "true"
+      LOG_LEVEL: info
+      WEBHOOK_TIMEOUT: "180"
+      SAFE_FETCH_ALLOW_PRIVATE_NETWORK: "true"
+      MAILER_SENDER_EMAIL: Chatwoot <chatwoot@localhost.test>
+      SMTP_ADDRESS: mailhog
+      SMTP_PORT: "1025"
+      SMTP_DOMAIN: localhost.test
+      ACTIVE_STORAGE_SERVICE: local
+    entrypoint: docker/entrypoints/rails.sh
+    command:
+      ["sh", "-c", "bundle exec rails db:chatwoot_prepare && exec bundle exec rails s -p 3000 -b 0.0.0.0"]
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - chatwoot_storage:/app/storage
+
+  sidekiq:
+    image: chatwoot/chatwoot:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      RAILS_ENV: production
+      NODE_ENV: production
+      INSTALLATION_ENV: docker
+      SECRET_KEY_BASE: ${CHATWOOT_SECRET_KEY_BASE:-local-only-change-me}
+      POSTGRES_HOST: postgres
+      POSTGRES_USERNAME: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DATABASE: chatwoot_production
+      REDIS_URL: redis://redis:6379
+      RAILS_LOG_TO_STDOUT: "true"
+      WEBHOOK_TIMEOUT: "180"
+      SAFE_FETCH_ALLOW_PRIVATE_NETWORK: "true"
+      ACTIVE_STORAGE_SERVICE: local
+    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
+    volumes:
+      - chatwoot_storage:/app/storage
+
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8025:8025"
+      - "127.0.0.1:1025:1025"
+
+  hermes-config:
+    image: nousresearch/hermes-agent:latest
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["cp /bootstrap/hermes.yaml /opt/data/config.yaml"]
+    volumes:
+      - ./config/hermes.yaml:/bootstrap/hermes.yaml:ro
+      - hermes_data:/opt/data
+
+  hermes:
+    image: nousresearch/hermes-agent:latest
+    restart: unless-stopped
+    depends_on:
+      hermes-config:
+        condition: service_completed_successfully
+    environment:
+      API_SERVER_ENABLED: "true"
+      API_SERVER_HOST: 0.0.0.0
+      API_SERVER_KEY: ${HERMES_API_KEY:-local-hermes-api-key}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://ai-gateway.void0.org/v1}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    command: ["gateway", "run"]
+    ports:
+      - "127.0.0.1:8642:8642"
+    volumes:
+      - hermes_data:/opt/data
+
+  bridge:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - chatwoot
+      - hermes
+    environment:
+      CHATWOOT_URL: http://chatwoot:3000
+      CHATWOOT_PUBLIC_URL: ${CHATWOOT_PUBLIC_URL:-http://localhost:3000}
+      CHATWOOT_WEBSITE_TOKEN: ${CHATWOOT_WEBSITE_TOKEN:-}
+      CHATWOOT_API_TOKEN: ${CHATWOOT_API_TOKEN:-}
+      CHATWOOT_WEBHOOK_SECRET: ${CHATWOOT_WEBHOOK_SECRET:-}
+      HERMES_API_URL: http://hermes:8642
+      HERMES_API_KEY: ${HERMES_API_KEY:-local-hermes-api-key}
+      HERMES_MODEL: ${HERMES_MODEL:-hermes-agent}
+      HERMES_INSTRUCTIONS_FILE: /app/config/employee.md
+      IDEMPOTENCY_DB: /app/data/idempotency.sqlite3
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - bridge_data:/app/data
+
+volumes:
+  postgres_data:
+  redis_data:
+  chatwoot_storage:
+  hermes_data:
+  bridge_data:
