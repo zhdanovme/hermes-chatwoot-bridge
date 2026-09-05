@@ -13,7 +13,7 @@ docker compose up -d
 docker compose logs -f bridge hermes
 ```
 
-Открыть Chatwoot: http://localhost:3000. MailHog для локальной почты: http://localhost:8025.
+Открыть Chatwoot: http://localhost:3000.
 
 Compose автоматически копирует `config/hermes.yaml` в volume Hermes через
 одноразовый сервис `hermes-config`. Его состояние `Exited (0)` после запуска —

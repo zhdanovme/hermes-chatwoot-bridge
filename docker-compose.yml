@@ -51,9 +51,6 @@ services:
       WEBHOOK_TIMEOUT: "180"
       SAFE_FETCH_ALLOW_PRIVATE_NETWORK: "true"
       MAILER_SENDER_EMAIL: Chatwoot <chatwoot@localhost.test>
-      SMTP_ADDRESS: mailhog
-      SMTP_PORT: "1025"
-      SMTP_DOMAIN: localhost.test
       ACTIVE_STORAGE_SERVICE: local
     entrypoint: docker/entrypoints/rails.sh
     command:
@@ -88,13 +85,6 @@ services:
     command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
     volumes:
       - chatwoot_storage:/app/storage
-
-  mailhog:
-    image: mailhog/mailhog:v1.0.1
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:8025:8025"
-      - "127.0.0.1:1025:1025"
 
   hermes-config:
     image: nousresearch/hermes-agent:latest
